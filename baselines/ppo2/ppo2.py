@@ -150,10 +150,16 @@ def constfn(val):
         return val
     return f
 
-def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr, 
-            vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95, 
+load_path = "C:\\Users\\simip\\AppData\\Local\\Temp\\openai-2018-01-19-06-05-35-349244\\checkpoints\\01350"
+#load_path = "D:\\ownCloud\\ETH\\5.Semester\\DeepLearning\\discrete_model_rainbow_land_finished\\checkpoints\\05510"
+#load_path = None
+model_path = None
+#model_path = "D:\\ownCloud\\ETH\\5.Semester\\DeepLearning\\discrete_model_rainbow_land_finished\\make_model.pkl"
+#load_path = None
+def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
+            vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
             log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
-            save_interval=0):
+            save_interval=10):
 
     if isinstance(lr, float): lr = constfn(lr)
     else: assert callable(lr)
@@ -167,14 +173,21 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     nbatch = nenvs * nsteps
     nbatch_train = nbatch // nminibatches
 
-    make_model = lambda : Model(policy=policy, ob_space=ob_space, ac_space=ac_space, nbatch_act=nenvs, nbatch_train=nbatch_train, 
+    make_model = lambda : Model(policy=policy, ob_space=ob_space, ac_space=ac_space, nbatch_act=nenvs, nbatch_train=nbatch_train,
                     nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
                     max_grad_norm=max_grad_norm)
+
+
     if save_interval and logger.get_dir():
         import cloudpickle
         with open(osp.join(logger.get_dir(), 'make_model.pkl'), 'wb') as fh:
             fh.write(cloudpickle.dumps(make_model))
     model = make_model()
+
+    if load_path is not None:
+        print('load model from: {}'.format(load_path))
+        model.load(load_path)
+
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
 
     epinfobuf = deque(maxlen=100)
@@ -214,7 +227,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                     mbflatinds = flatinds[mbenvinds].ravel()
                     slices = (arr[mbflatinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
                     mbstates = states[mbenvinds]
-                    mblossvals.append(model.train(lrnow, cliprangenow, *slices, mbstates))            
+                    mblossvals.append(model.train(lrnow, cliprangenow, *slices, mbstates))
 
         lossvals = np.mean(mblossvals, axis=0)
         tnow = time.time()
@@ -229,6 +242,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             logger.logkv('eprewmean', safemean([epinfo['r'] for epinfo in epinfobuf]))
             logger.logkv('eplenmean', safemean([epinfo['l'] for epinfo in epinfobuf]))
             logger.logkv('time_elapsed', tnow - tfirststart)
+            logger.logkv('learning_rate_now', lrnow)
             for (lossval, lossname) in zip(lossvals, model.loss_names):
                 logger.logkv(lossname, lossval)
             logger.dumpkvs()
@@ -238,6 +252,58 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             savepath = osp.join(checkdir, '%.5i'%update)
             print('Saving to', savepath)
             model.save(savepath)
+    env.close()
+
+
+def run_only(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
+            vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
+            log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
+            save_interval=10):
+
+    if isinstance(lr, float): lr = constfn(lr)
+    else: assert callable(lr)
+    if isinstance(cliprange, float): cliprange = constfn(cliprange)
+    else: assert callable(cliprange)
+    total_timesteps = int(total_timesteps)
+
+    nenvs = env.num_envs
+    ob_space = env.observation_space
+    ac_space = env.action_space
+    nbatch = nenvs * nsteps
+    nbatch_train = nbatch // nminibatches
+
+    make_model = lambda : Model(policy=policy, ob_space=ob_space, ac_space=ac_space, nbatch_act=nenvs, nbatch_train=nbatch_train,
+                    nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
+                    max_grad_norm=max_grad_norm)
+
+
+    if save_interval and logger.get_dir():
+        import cloudpickle
+        with open(osp.join(logger.get_dir(), 'make_model.pkl'), 'wb') as fh:
+            fh.write(cloudpickle.dumps(make_model))
+
+    if model_path is not None:
+        import pickle
+        with open(model_path, 'rb') as f:
+            make_model = pickle.load(f)
+
+
+    model = make_model()
+
+
+    assert load_path is not None
+
+    if load_path is not None:
+        print('load model from: {}'.format(load_path))
+        model.load(load_path)
+
+    runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
+
+    nupdates = total_timesteps//nbatch
+    for update in range(1, nupdates+1):
+        assert nbatch % nminibatches == 0
+        nbatch_train = nbatch // nminibatches
+        obs, returns, masks, actions, values, neglogpacs, states, epinfos = runner.run() #pylint: disable=E0632
     env.close()
 
 def safemean(xs):
